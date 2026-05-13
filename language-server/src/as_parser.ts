@@ -1204,13 +1204,20 @@ export function UpdateModuleFromDisk(module : ASModule)
     ClearModule(module);
     try
     {
-        module.content = fs.readFileSync(module.filename, 'utf8');
-
-        // If there is a Byte-Order-Mark, remove it. vscode pretends it doesn't exist
-        // and we don't want to desync with what vscode thinks the document looks like.
-        if (module.content.charCodeAt(0) === 0xfeff)
-            module.content = module.content.substring(1);
-
+        // Pick the encoding from the BOM (FF FE = UTF-16 LE, FE FF = UTF-16 BE, otherwise UTF-8).
+        // Reading a UTF-16 file as UTF-8 produces a string of replacement characters and the
+        // parser silently rejects every statement, so vscode and the language server disagree
+        // about the file's contents. TextDecoder strips the BOM for us regardless of encoding.
+        let buffer = fs.readFileSync(module.filename);
+        let encoding = "utf-8";
+        if (buffer.length >= 2)
+        {
+            if (buffer[0] === 0xff && buffer[1] === 0xfe)
+                encoding = "utf-16le";
+            else if (buffer[0] === 0xfe && buffer[1] === 0xff)
+                encoding = "utf-16be";
+        }
+        module.content = new TextDecoder(encoding).decode(buffer);
         module.exists = true;
     }
     catch (readError)
