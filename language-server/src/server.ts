@@ -59,8 +59,21 @@ let connection: Connection = createConnection(new IPCMessageReader(process), new
 // Create a connection to unreal
 let unreal : Socket;
 
-const hostname = "127.0.0.1";
+let hostname = "127.0.0.1";
 let port : number = 27099;
+
+let overrideActive = false;       // true while an editor-discovery reroute is in effect
+let configuredPort = 27099;       // last port from VS Code settings, used to revert on clear
+
+// Apply a connection target and reconnect only if it actually changed.
+function applyConnectionTarget(newHost: string, newPort: number)
+{
+    if (newHost === hostname && newPort === port)
+        return;
+    hostname = newHost;
+    port = newPort;
+    connect_unreal();
+}
 
 let ParseQueue : Array<scriptfiles.ASModule> = [];
 let ParseQueueIndex = 0;
@@ -1079,6 +1092,21 @@ connection.onRequest("angelscript/getModuleForSymbol", (...params: any[]) : stri
     }
 });
 
+connection.onNotification("angelscript/setUnrealConnection", (target : { hostname : string | null, port : number | null }) =>
+{
+    if (target && target.hostname && target.port)
+    {
+        overrideActive = true;
+        applyConnectionTarget(target.hostname, target.port);
+    }
+    else
+    {
+        // Cleared: revert to the statically configured port on loopback.
+        overrideActive = false;
+        applyConnectionTarget("127.0.0.1", configuredPort);
+    }
+});
+
 connection.onRequest("angelscript/getAPI", (root : string) : any => {
     if (typedb.HasTypesFromUnreal())
         return api_docs.GetAPIList(root);
@@ -1246,12 +1274,11 @@ connection.onDidChangeConfiguration(function (change : DidChangeConfigurationPar
     if (dirtyDiagnostics)
         DirtyAllDiagnostics();
 
-    if (port != settings.unrealConnectionPort)
+    configuredPort = settings.unrealConnectionPort;
+    if (!overrideActive && port != configuredPort)
     {
-        port = settings.unrealConnectionPort;
-
-        // If the port has changed, reconnect
-        connect_unreal();
+        // No discovery override in effect — honor the static setting as before.
+        applyConnectionTarget("127.0.0.1", configuredPort);
     }
 
     let completionSettings = parsedcompletion.GetCompletionSettings();
