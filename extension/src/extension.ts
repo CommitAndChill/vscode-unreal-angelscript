@@ -14,6 +14,7 @@ import { WorkspaceFolder, DebugConfiguration, ProviderResult, CancellationToken 
 import { ASDebugSession } from './debug';
 import * as Net from 'net';
 import { ClientRequest } from 'http';
+import * as decorations from './decorations';
 
 const GetModuleForSymbolRequest = new RequestType<TextDocumentPositionParams, string, void>('angelscript/getModuleForSymbol');
 const ProvideInlineValuesRequest = new RequestType<TextDocumentPositionParams, any[], void>('angelscript/provideInlineValues');
@@ -54,6 +55,10 @@ export function activate(context: ExtensionContext) {
     client.onNotification("angelscript/wantSave", (uri : string) => {
         setTimeout(() => vscode.workspace.saveAll(), 100);
     });
+
+    // Pill / chip decorations on top of normal syntax highlighting. Driven by
+    // the UnrealAngelscript.decorations.* settings.
+    decorations.activate(context);
 
     // register a configuration provider for 'mock' debug type
     const provider = new ASConfigurationProvider();

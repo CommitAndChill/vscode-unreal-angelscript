@@ -2,7 +2,7 @@
     "name": "unreal-angelscript",
     "displayName": "Unreal Angelscript",
     "description": "Language Server and Debug Adapter for use with the UnrealEngine-Angelscript plugin from https://github.com/Hazelight/UnrealEngine-Angelscript",
-    "version": "1.9.2",
+    "version": "1.9.3-decorations",
     "publisher": "Hazelight",
     "icon": "resources/angelscript_unreal.png",
     "engines": {
@@ -460,6 +460,131 @@
                             }
                         }
                     }
+                },
+                "UnrealAngelscript.decorations.enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Master switch for the pill/chip decorations on top of normal syntax highlighting."
+                },
+                "UnrealAngelscript.decorations.colorPalette": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" },
+                    "default": {
+                        "red":          "#c93a2a",
+                        "orange":       "#e07700",
+                        "yellow":       "#c2a020",
+                        "green":        "#2d8a4a",
+                        "blue":         "#1a4a8a",
+                        "purple":       "#6d28d9",
+                        "redOrange":    "#e0440d",
+                        "yellowOrange": "#e09020",
+                        "yellowGreen":  "#a5b832",
+                        "blueGreen":    "#1aa898",
+                        "bluePurple":   "#5040a0",
+                        "redPurple":    "#a020a0",
+                        "rose":         "#d65f7a",
+                        "teal":         "#1a8a8a",
+                        "indigo":       "#3a4a9a",
+                        "gold":         "#d4a017",
+                        "silver":       "#9aa0a8",
+                        "titanium":     "#7a8590"
+                    },
+                    "description": "Named hex colors referenced by decoration rules and prefix tints. Add your own entries to extend."
+                },
+                "UnrealAngelscript.decorations.fillLevels": {
+                    "type": "object",
+                    "additionalProperties": { "type": "number" },
+                    "default": {
+                        "ghost":  0.08,
+                        "light":  0.15,
+                        "medium": 0.25,
+                        "vivid":  0.40
+                    },
+                    "description": "Named fill alpha levels used by decoration rules."
+                },
+                "UnrealAngelscript.decorations.rules": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["name", "pattern", "color", "fill"],
+                        "properties": {
+                            "name":         { "type": "string" },
+                            "pattern":      { "type": "string", "description": "JavaScript regex; the 'g' flag is added automatically." },
+                            "color":        { "type": "string", "description": "Palette color name (from colorPalette)." },
+                            "fill":         { "type": "string", "description": "Fill level name (from fillLevels)." },
+                            "captureGroup": { "type": "number", "description": "If set, decorate only this regex capture group instead of the whole match." },
+                            "shape":        { "type": "string", "enum": ["pill", "rounded", "square"], "default": "pill" },
+                            "borderStyle":  { "type": "string", "enum": ["solid", "dashed", "dotted", "double", "none"], "default": "solid" },
+                            "borderWidth":  { "type": "number", "default": 1, "minimum": 0 }
+                        }
+                    },
+                    "default": [
+                        { "name": "UPROPERTY/UFUNCTION", "pattern": "\\b(UPROPERTY|UFUNCTION)(?=\\()", "color": "blue",      "fill": "vivid",  "shape": "pill",    "borderStyle": "solid", "borderWidth": 1 },
+                        { "name": "BlueprintEvent",      "pattern": "\\bBlueprintEvent\\b",            "color": "red",       "fill": "light",  "shape": "pill",    "borderStyle": "solid", "borderWidth": 1 },
+                        { "name": "BlueprintOverride",   "pattern": "\\bBlueprintOverride\\b",         "color": "redOrange", "fill": "light",  "shape": "pill",    "borderStyle": "solid", "borderWidth": 1 },
+                        { "name": "DefaultComponent",    "pattern": "\\bDefaultComponent\\b",          "color": "teal",      "fill": "light",  "shape": "pill",    "borderStyle": "solid", "borderWidth": 1 },
+                        { "name": "ExposeOnSpawn",       "pattern": "\\bExposeOnSpawn\\b",             "color": "gold",      "fill": "light",  "shape": "pill",    "borderStyle": "solid", "borderWidth": 1 },
+                        { "name": "Category",            "pattern": "\\bCategory\\b",                  "color": "silver",    "fill": "ghost",  "shape": "rounded", "borderStyle": "none",  "borderWidth": 0 },
+                        { "name": "GameplayTags",        "pattern": "\\bGameplayTags?::\\w+",          "color": "green",     "fill": "medium", "shape": "pill",    "borderStyle": "solid", "borderWidth": 1 },
+                        { "name": "Name literal content","pattern": "n\"([^\"\\r\\n]*)\"",             "color": "purple",    "fill": "light",  "shape": "pill",    "borderStyle": "solid", "borderWidth": 1, "captureGroup": 1 },
+                        { "name": "f-string content",    "pattern": "f\"([^\"\\r\\n]*)\"",             "color": "orange",    "fill": "light",  "shape": "pill",    "borderStyle": "solid", "borderWidth": 1, "captureGroup": 1 }
+                    ],
+                    "description": "Decoration rules. Each picks a color from colorPalette and a fill from fillLevels and applies a pill (or rounded/square) chip to regex matches. Use captureGroup to chip just a regex capture group; e.g. the content inside n\"...\"."
+                },
+                "UnrealAngelscript.decorations.delegateColor": {
+                    "type": "string",
+                    "default": "red",
+                    "description": "Palette color used for the overlay pill on FDelegate(this, n\"...\") expressions. The pill is Ctrl/Cmd-clickable and jumps to the bound function."
+                },
+                "UnrealAngelscript.decorations.delegateFill": {
+                    "type": "string",
+                    "default": "medium",
+                    "description": "Fill level used for the delegate overlay pill."
+                },
+                "UnrealAngelscript.decorations.fadedPrefixes": {
+                    "type": "array",
+                    "items": {
+                        "anyOf": [
+                            { "type": "string" },
+                            {
+                                "type": "object",
+                                "required": ["prefix"],
+                                "properties": {
+                                    "prefix":  { "type": "string", "description": "Prefix string to match at identifier boundaries." },
+                                    "opacity": { "type": "number", "minimum": 0.05, "maximum": 1, "description": "Override the global fadedOpacity for this prefix." },
+                                    "color":   { "type": "string", "description": "Optional palette color name applied as a text tint." }
+                                }
+                            }
+                        ]
+                    },
+                    "default": [
+                        "FCk_Delegate_",
+                        "FBb_Delegate_",
+                        "FCk_",
+                        "FBb_",
+                        "UCk_Utils_",
+                        "UBb_"
+                    ],
+                    "description": "Identifier prefixes that get visually faded to reduce symbol noise. Entries can be plain strings (just fade) or { prefix, opacity?, color? } for per-prefix tuning. Longest matching prefix wins."
+                },
+                "UnrealAngelscript.decorations.fadedOpacity": {
+                    "type": "number",
+                    "default": 0.35,
+                    "minimum": 0.05,
+                    "maximum": 1,
+                    "description": "Opacity applied to faded prefixes off the cursor's line (1 = no fade)."
+                },
+                "UnrealAngelscript.decorations.revealOnCursorLine": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "When true, faded prefixes on the cursor's line use 'cursorLineOpacity' instead of 'fadedOpacity'."
+                },
+                "UnrealAngelscript.decorations.cursorLineOpacity": {
+                    "type": "number",
+                    "default": 1,
+                    "minimum": 0.05,
+                    "maximum": 1,
+                    "description": "Opacity applied to faded prefixes on the cursor's line when revealOnCursorLine is true."
                 }
             }
         },
