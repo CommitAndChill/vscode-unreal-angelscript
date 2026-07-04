@@ -818,6 +818,7 @@
         "compile": "npm run compile:extension && npm run compile:language-server",
         "compile:extension": "cd extension && node esbuild.js",
         "compile:language-server": "cd language-server && node esbuild.js",
+        "test": "cd extension && node esbuild.test.js && node --test out-test/*.test.js",
         "watch": "npm-run-all -p watch:*",
         "watch:extension": "cd extension && node esbuild.js --watch",
         "watch:language-server": "cd language-server && node esbuild.js --watch",
