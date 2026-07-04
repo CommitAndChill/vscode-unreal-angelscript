@@ -89,6 +89,11 @@
                     "default": 27099,
                     "description": "What port to use when connecting to the Unreal engine game or editor instance for auto-completion and debugging. Must match the debug port configured in the Unreal Engine project settings, or as a launch argument (-asdebugport=)."
                 },
+                "UnrealAngelscript.autoStartDebugging": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Automatically detect a running Unreal Editor whose script folders match this workspace, start debugging against it, and point auto-completion at its port. Turn off to require manually starting the debugger."
+                },
                 "UnrealAngelscript.inlayHints.inlayHintsEnabled": {
                     "type": "boolean",
                     "default": true,

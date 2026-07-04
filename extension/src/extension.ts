@@ -15,6 +15,7 @@ import { ASDebugSession } from './debug';
 import * as Net from 'net';
 import { ClientRequest } from 'http';
 import * as decorations from './decorations';
+import * as discovery from './discovery';
 
 const GetModuleForSymbolRequest = new RequestType<TextDocumentPositionParams, string, void>('angelscript/getModuleForSymbol');
 const ProvideInlineValuesRequest = new RequestType<TextDocumentPositionParams, any[], void>('angelscript/provideInlineValues');
@@ -59,6 +60,9 @@ export function activate(context: ExtensionContext) {
     // Pill / chip decorations on top of normal syntax highlighting. Driven by
     // the UnrealAngelscript.decorations.* settings.
     decorations.activate(context);
+
+    // Auto-detect a running Unreal Editor and auto-start debugging.
+    discovery.activate(context, client);
 
     // register a configuration provider for 'mock' debug type
     const provider = new ASConfigurationProvider();
@@ -203,6 +207,10 @@ export function activate(context: ExtensionContext) {
     {
         apiDetails.showDetails(data);
     });
+}
+
+export function deactivate(): Thenable<void> {
+    return discovery.deactivate();
 }
 
 class ASApiSearchProvider implements vscode.WebviewViewProvider
