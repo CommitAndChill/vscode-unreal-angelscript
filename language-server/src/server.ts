@@ -71,6 +71,7 @@ let PostProcessTypesQueueIndex = 0;
 let ResolveQueue : Array<scriptfiles.ASModule> = [];
 let ResolveQueueIndex = 0;
 let IsServicingQueues = false;
+let DiagnosticReportSent = false;
 
 let ReceivingTypesTimeout : any = null;
 let SetTypeTimeout = false;
@@ -508,7 +509,37 @@ function TickQueues()
     else
     {
         IsServicingQueues = false;
-        // console.log("Finished servicing queues");
+
+        // Temporary diagnostic: report modules that parsed=true but produced
+        // zero namespaces AND zero globalSymbols AND zero types. That's the
+        // signature of a silent parse failure (e.g. an undetected encoding).
+        if (!DiagnosticReportSent)
+        {
+            DiagnosticReportSent = true;
+            let allModules = scriptfiles.GetAllLoadedModules();
+            let silentFailures : Array<{filename: string, contentLen: number, head: string}> = [];
+            for (let m of allModules)
+            {
+                if (!m || !m.parsed) continue;
+                let nsCount = m.namespaces ? m.namespaces.length : 0;
+                let symCount = m.globalSymbols ? m.globalSymbols.length : 0;
+                let typeCount = m.types ? m.types.length : 0;
+                let contentLen = m.content ? m.content.length : 0;
+                if (contentLen > 100 && nsCount === 0 && symCount === 0 && typeCount === 0)
+                {
+                    silentFailures.push({
+                        filename: m.filename || "(unknown)",
+                        contentLen,
+                        head: m.content ? m.content.substring(0, 80).replace(/\r/g, "\\r").replace(/\n/g, "\\n") : "",
+                    });
+                }
+            }
+            connection.console.log("[diag] modules with silent parse failure: " + silentFailures.length);
+            for (let f of silentFailures.slice(0, 20))
+            {
+                connection.console.log("[diag]   " + f.filename + " (len=" + f.contentLen + ") head: " + f.head);
+            }
+        }
     }
 }
 
