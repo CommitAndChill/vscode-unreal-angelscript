@@ -63,12 +63,14 @@ Each has two subfolders:
 1. Editor starts; `FAngelscriptDebugServer`'s `FTcpListener` binds successfully. Engine writes `editors/<pid>.json`. Deleted on clean shutdown (debug server destructor); a crash leaves it behind for the extension to invalidate via liveness checks.
 2. Extension activates in a VS Code window; writes `vscode-windows/<pid>.json`, refreshing `heartbeat` every ~10s; deletes it on deactivate.
 3. Extension continuously watches `editors/` (fs.watch plus a ~2s polling fallback, since fs.watch is unreliable on some platforms/network drives — not just at activation, since the Editor may launch after VS Code is already open).
-4. Before trusting an `editors/` entry, the extension verifies: the PID is alive (`process.kill(pid, 0)`) AND a quick TCP connect to `host:port` succeeds. Entries failing either check are treated as stale and opportunistically deleted.
-5. Matching: **any overlap** (ancestor/descendant/equal path comparison) between an entry's `scriptRootPaths` and this window's open workspace folders. Among multiple matching entries, pick the highest `startTime`.
-6. On a new match for a workspace with no currently-tracked auto session: synthesize `{ type: 'angelscript', request: 'launch', name: 'Auto: <projectName>', hostname, port, stopOnEntry: false }` and call `vscode.debug.startDebugging(folder, config)`. Track `{ folder → { pid, sessionId } }`.
+4. **Two-tier liveness, and deletion is gated on process death only.** Before *attaching* to an `editors/` entry the extension requires both: the PID is alive (`process.kill(pid, 0)`) AND a quick TCP connect to `host:port` succeeds. But the two checks have different consequences, because the Engine writes its file exactly once (at bind) and never re-asserts it:
+   - **PID dead** → the entry is genuinely stale; the extension may delete the file.
+   - **PID alive but TCP probe fails** → treat as *not-attachable-right-now* and retry on the next scan. **Do NOT delete the file.** A live Editor mid-hitch (asset cook, PIE spin-up, GC, blocking load) can fail a probe transiently; deleting its once-written registration would permanently lose auto-attach for that Editor until it restarts. Deletion of another process's registration must never be driven by a transient network probe — only by confirmed process death.
+5. Matching, **per Editor entry** (not per workspace folder): for each live `editors/` entry, test **any overlap** (ancestor/descendant/equal path comparison) between that entry's `scriptRootPaths` and this window's open workspace folders. An entry either matches this window or it doesn't; a multi-root workspace overlapping the same Editor on several folders is still **one** matched Editor. Among multiple *distinct* matching Editors, pick the highest `startTime`.
+6. **One auto session per matched Editor, keyed by Editor identity.** Maintain `{ editorPid → { sessionId, host, port } }`. On a newly-matched Editor with no tracked session and not in the declined set: synthesize `{ type: 'angelscript', request: 'launch', name: 'Auto: <projectName>', hostname, port, stopOnEntry: false }` and call `vscode.debug.startDebugging(folder, config)` **exactly once**, passing any one overlapping folder (or `undefined`) — never once per overlapping folder. Keying on `editorPid` rather than on workspace folder is what prevents a 3-folder multi-root workspace from spawning three sessions against one Editor (Testing plan case 2 guards this directly).
 7. Send a custom LSP notification `angelscript/setUnrealConnection { hostname, port }` to the language server whenever the matched target changes (including "no match" → falls back to the static `unrealConnectionPort` setting). `language-server/src/server.ts`'s `connect_unreal()` reconnects only when the effective target actually changes.
-8. If the user manually stops an auto-started session while its Editor is still running (discovery entry still present), that `pid` is marked declined for the rest of this VS Code window's lifetime — no automatic re-attach to it unless the entry disappears and reappears (i.e. the Editor actually restarted).
-9. Engine-side, when `bAutoOpenVSCode` is enabled: before calling the existing `GenerateVSCodeWorkspaceFile()` + `OpenVsCode()` path, scan `vscode-windows/` for an entry with fresh heartbeat (< 30s old) whose `scriptRootPaths` overlap this instance's `AllRootPaths`; skip launching if found.
+8. If the user manually stops an auto-started session while its Editor is still running (discovery entry still present), that `editorPid` is added to a declined set for the rest of this VS Code window's lifetime — no automatic re-attach to it unless the entry disappears and reappears. Because a restarted Editor gets a **new** PID (and thus a new `editors/<pid>.json`), a genuine restart naturally clears the decline and re-attaches; only the same still-running instance stays declined.
+9. Engine-side, when `bAutoOpenVSCode` is enabled: before calling the existing `GenerateVSCodeWorkspaceFile()` + `OpenVsCode()` path, scan `vscode-windows/` for an entry with fresh heartbeat (< 30s old) whose `scriptRootPaths` overlap this instance's `AllRootPaths`; skip launching if found. **This check is inherently racy** (see Known limitations): the extension writes its heartbeat asynchronously, so an Editor and a VS Code window launched near-simultaneously can each fail to observe the other. To narrow the window the Engine retries the scan for a short bounded period (e.g. poll every 0.5s for up to ~3s) before deciding to launch; it does not, and cannot, fully eliminate the race.
 
 ## Engine-side changes (`D:\Repos\UnrealEngineAngelscript`)
 
@@ -80,7 +82,7 @@ Each has two subfolders:
 
 ## Extension-side changes (this repo)
 
-- **New module** `extension/src/unreal-discovery.ts`, activated from `extension/src/extension.ts`'s `activate()`. Owns: self-registration/heartbeat, watching `editors/`, liveness validation, matching, auto-attach via `vscode.debug.startDebugging`, decline-tracking, and sending the LSP reroute notification.
+- **New module** `extension/src/unreal-discovery.ts`, activated from `extension/src/extension.ts`'s `activate()`. Owns: self-registration/heartbeat, watching `editors/`, two-tier liveness validation (delete on PID-death only, per flow step 4), **per-Editor** matching and at-most-one-session-per-Editor auto-attach keyed by `editorPid` (per flow steps 5–6), decline-tracking, and sending the LSP reroute notification.
 - **`language-server/src/server.ts`**: add a handler for `angelscript/setUnrealConnection`; `connect_unreal()` reconnects only on an actual target change; falls back to the static `unrealConnectionPort` setting when notified of "no match."
 - **New setting** `UnrealAngelscript.autoStartDebugging` (boolean, default `true`) — master toggle for discovery watching, auto-attach, and LS rerouting together.
 - **No changes** to `unreal-debugclient.ts`'s or `server.ts`'s singleton connection model beyond the reconnect-on-notified-target-change described above (see Non-goals).
@@ -90,24 +92,33 @@ Each has two subfolders:
 - Missing discovery directory on first run: both sides create it lazily; the extension's watcher tolerates it not existing yet.
 - Permission errors writing the shared directory: log once, degrade silently to today's fully-manual behavior; never blocks Editor startup or extension activation.
 - Torn/partial JSON reads: parse errors are swallowed and retried next scan.
-- Stale files from a crash: PID-liveness + freshness checks on both sides, with opportunistic cleanup.
+- Stale files from a crash: the extension deletes an `editors/` entry only after confirming the PID is dead (a transient TCP-probe failure never triggers deletion — see flow step 4), so a hitching-but-alive Editor keeps its registration.
 - Two Editors racing for the same default port: the Engine only writes its discovery entry after a successful bind, so a failed-to-bind instance is correctly invisible.
 - Two VS Code windows matching the same project: both are allowed to independently auto-attach; the Engine's `ClientsThatAreDebugging` list already supports multiple simultaneous debug clients.
-- Editor closes mid-session: existing socket-close/termination handling is unchanged; the extension clears its tracking map on `onDidTerminateDebugSession` so a later relaunch can re-match.
+- Editor closes mid-session: existing socket-close/termination handling is unchanged; the extension clears its `{ editorPid → session }` tracking on `onDidTerminateDebugSession` so a later relaunch can re-match.
 - No bind-to-connect race: the discovery file only appears once the port is already accepting connections.
+- Manual F5 after an LS reroute: a manually-started debug session uses the static `unrealConnectionPort` setting (via `resolveDebugConfiguration`), *not* the discovered port, so if discovery has rerouted the language server to a non-default port, a manual F5 would connect the debugger to a different Editor than autocomplete is talking to. Acceptable on the manual path (the whole point of this feature is to make the auto path the norm), but noted so it isn't mistaken for a bug.
+
+## Known limitations
+
+- **Standalone shared-plugin folder can match the wrong Editor.** Match criterion is any-overlap (a deliberate choice — it's what makes the generated multi-root workspace and single-project layouts both work). Its sharp edge: if the user opens *only* a shared plugin's `…/PluginX/Script` folder standalone, and two different projects both enable PluginX, both Editors overlap that folder and both match; the `startTime` tiebreak attaches to whichever launched most recently, which may be the wrong project. This cannot happen when the full multi-root workspace (or the single project) is open, because the unique project root disambiguates. Documented, not fixed — fixing would mean abandoning the any-overlap criterion the user chose.
+- **Auto-open-VSCode duplicate-window race.** The Engine's skip-if-already-open check (flow step 9) reads a heartbeat file the extension writes asynchronously. An Editor and a VS Code window launched near-simultaneously can each miss the other, producing a second VS Code window. The bounded retry in step 9 narrows but cannot close this window. Considered acceptable: the setting is opt-in (`bAutoOpenVSCode`, default off) and the failure mode is a duplicate window, not data loss.
+- **Debug server binds on all interfaces.** Pre-existing: `FAngelscriptDebugServer` binds on `FIPv4Address::Any` (`AngelscriptDebugServer.cpp:297`), so the debug port is remotely reachable, and this feature now advertises that port via the per-user discovery files. Not changed here — flagged so the exposure is a conscious choice rather than an accidental one introduced by discovery. Restricting the bind to loopback (when no remote debugging is configured) is a separate, out-of-scope hardening.
 
 ## Testing plan
 
 Manual integration matrix (cross-process/cross-repo — no realistic way to unit test the Engine↔VSCode handshake in isolation beyond the pure path-matching logic, which should get unit tests):
 
-1. Single Editor + single VS Code window, defaults → auto-attaches quietly, no `stopOnEntry` break.
-2. Two Editor instances (two projects, distinct `-asdebugport`), two VS Code windows → each attaches only to its own match.
-3. Editor launched *after* VS Code is already open → still detected.
-4. Manual stop of an auto-attached session while the Editor keeps running → no immediate re-attach; Editor restart → re-attaches.
-5. Simulated Editor crash (kill process) → stale entry cleaned up, no zombie attach attempts.
-6. `bAutoOpenVSCode=true`: skips launching a second VS Code when a matching window is already open; launches when none is.
-7. `autoStartDebugging=false` → falls back fully to current manual-F5 behavior (regression check).
-8. Language server correctly follows the discovered port when it differs from the static `unrealConnectionPort` setting.
+1. Single Editor + single VS Code window (single project Script folder open), defaults → auto-attaches quietly, no `stopOnEntry` break.
+2. **Multi-root `Angelscript.code-workspace` open (project + 2 plugin roots), one matching Editor → exactly ONE debug session, not one per folder.** (Direct regression guard for the per-Editor dedup keying.)
+3. Two Editor instances (two projects, distinct `-asdebugport`), two VS Code windows → each attaches only to its own match.
+4. Editor launched *after* VS Code is already open → still detected.
+5. Manual stop of an auto-attached session while the Editor keeps running → no immediate re-attach; Editor restart (new PID) → re-attaches.
+6. Editor mid-hitch: PID alive but TCP probe times out transiently → the `editors/` file is **not** deleted, and auto-attach succeeds on a later scan once the Editor is responsive again.
+7. Simulated Editor crash (kill process, PID gone) → stale entry deleted, no zombie attach attempts.
+8. `bAutoOpenVSCode=true`: skips launching a second VS Code when a matching window is already open; launches when none is.
+9. `autoStartDebugging=false` → falls back fully to current manual-F5 behavior (regression check).
+10. Language server correctly follows the discovered port when it differs from the static `unrealConnectionPort` setting.
 
 ## Settings summary
 
