@@ -13,6 +13,8 @@
         "Debuggers"
     ],
     "activationEvents": [
+        "onStartupFinished",
+        "workspaceContains:**/*.as",
         "onDebug",
         "onLanguage:angelscript"
     ],

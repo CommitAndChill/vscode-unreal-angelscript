@@ -61,13 +61,14 @@ export function activate(context: ExtensionContext) {
     // the UnrealAngelscript.decorations.* settings.
     decorations.activate(context);
 
-    // Auto-detect a running Unreal Editor and auto-start debugging.
-    discovery.activate(context, client);
-
     // register a configuration provider for 'mock' debug type
     const provider = new ASConfigurationProvider();
     context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('angelscript', provider));
     context.subscriptions.push(provider);
+
+    // Auto-detect a running Unreal Editor and auto-start debugging.
+    // Registered AFTER the debug configuration provider so an auto-attach can resolve it.
+    discovery.activate(context, client);
 
     let evaluatableExpressionProvider = new ASEvaluateableExpressionProvider();
     context.subscriptions.push(vscode.languages.registerEvaluatableExpressionProvider('angelscript', evaluatableExpressionProvider));
