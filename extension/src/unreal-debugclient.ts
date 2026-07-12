@@ -188,17 +188,23 @@ export function connect(hostname: string, port : number)
     {
         sendDisconnect();
         unreal.destroy();
+        unreal = null;
     }
-    unreal = new Socket;
+    // Handlers below capture `socket` rather than reading the module-level
+    // `unreal`, so a stale socket's close event can never tear down (or emit
+    // "Closed" on behalf of) a newer connection.
+    let socket = new Socket;
+    unreal = socket;
     connected = true;
+    pendingBuffer = Buffer.alloc(0);
 
 	//connection.console.log('Connecting to unreal editor...');
-	unreal.connect(port, hostname, function()
+	socket.connect(port, hostname, function()
 	{
 		//connection.console.log('Connection to unreal editor established.');
 	});
 
-	unreal.on("data", function(data : Buffer) {
+	socket.on("data", function(data : Buffer) {
 		let messages : Array<Message> = readMessages(data);
 		for (let msg of messages)
 		{
@@ -241,33 +247,36 @@ export function connect(hostname: string, port : number)
 		}
 	});
 
-	unreal.on("error", function() {
-		if (unreal != null)
+	let onSocketClosed = function() {
+		socket.destroy();
+		if (unreal === socket)
 		{
-			unreal.destroy();
 			unreal = null;
+			connected = false;
 
             events.emit("Closed");
 		}
-	});
+	};
 
-	unreal.on("close", function() {
-		if (unreal != null)
-		{
-			unreal.destroy();
-			unreal = null;
-
-            events.emit("Closed");
-		}
-	});
+	socket.on("error", onSocketClosed);
+	socket.on("close", onSocketClosed);
 }
 
 export function disconnect()
 {
-    sendDisconnect();
-    unreal.destroy();
+    if (unreal != null)
+    {
+        sendDisconnect();
+        unreal.destroy();
+    }
     unreal = null;
     connected = false;
+}
+
+function write(msg : Buffer)
+{
+    if (unreal != null)
+        unreal.write(msg);
 }
 
 export function sendPause()
@@ -276,7 +285,7 @@ export function sendPause()
     msg.writeUInt32LE(1, 0);
     msg.writeUInt8(MessageType.Pause, 4);
 
-    unreal.write(msg);
+    write(msg);
 }
 
 export function sendContinue()
@@ -285,7 +294,7 @@ export function sendContinue()
     msg.writeUInt32LE(1, 0);
     msg.writeUInt8(MessageType.Continue, 4);
 
-    unreal.write(msg);
+    write(msg);
 }
 
 export function sendRequestBreakFilters()
@@ -294,7 +303,7 @@ export function sendRequestBreakFilters()
     msg.writeUInt32LE(1, 0);
     msg.writeUInt8(MessageType.RequestBreakFilters, 4);
 
-    unreal.write(msg);
+    write(msg);
 }
 
 export function sendRequestCallStack()
@@ -303,7 +312,7 @@ export function sendRequestCallStack()
     msg.writeUInt32LE(1, 0);
     msg.writeUInt8(MessageType.RequestCallStack, 4);
 
-    unreal.write(msg);
+    write(msg);
 }
 
 export function sendDisconnect()
@@ -312,7 +321,7 @@ export function sendDisconnect()
     msg.writeUInt32LE(1, 0);
     msg.writeUInt8(MessageType.Disconnect, 4);
 
-    unreal.write(msg);
+    write(msg);
 }
 
 export function sendStartDebugging(version: number)
@@ -324,7 +333,7 @@ export function sendStartDebugging(version: number)
 
     msg.writeUInt32LE(msg.length - 4, 0);
 
-    unreal.write(msg);
+    write(msg);
 }
 
 export function sendStopDebugging()
@@ -333,7 +342,7 @@ export function sendStopDebugging()
     msg.writeUInt32LE(1, 0);
     msg.writeUInt8(MessageType.StopDebugging, 4);
 
-    unreal.write(msg);
+    write(msg);
 }
 
 export function clearBreakpoints(pathname : string, moduleName : string)
@@ -343,7 +352,7 @@ export function clearBreakpoints(pathname : string, moduleName : string)
     msg = Buffer.concat([msg, writeString(pathname), writeString(moduleName)]);
 
     msg.writeUInt32LE(msg.length - 4, 0);
-    unreal.write(msg);
+    write(msg);
 }
 
 export function setBreakpoint(id : number, pathname : string, line : number, moduleName : string)
@@ -357,7 +366,7 @@ export function setBreakpoint(id : number, pathname : string, line : number, mod
     ]);
 
     msg.writeUInt32LE(msg.length - 4, 0);
-    unreal.write(msg);
+    write(msg);
 }
 
 export interface UnrealDataBreakpoint
@@ -403,7 +412,7 @@ export function setDataBreakpoints(breakpoints: UnrealDataBreakpoint[])
     }
 
     payload.writeUInt32LE(payload.length - 4, 0);
-    unreal.write(payload);
+    write(payload);
 }
 
 export function sendStepIn()
@@ -412,7 +421,7 @@ export function sendStepIn()
     msg.writeUInt32LE(1, 0);
     msg.writeUInt8(MessageType.StepIn, 4);
 
-    unreal.write(msg);
+    write(msg);
 }
 
 export function sendStepOver()
@@ -421,7 +430,7 @@ export function sendStepOver()
     msg.writeUInt32LE(1, 0);
     msg.writeUInt8(MessageType.StepOver, 4);
 
-    unreal.write(msg);
+    write(msg);
 }
 
 export function sendStepOut()
@@ -430,7 +439,7 @@ export function sendStepOut()
     msg.writeUInt32LE(1, 0);
     msg.writeUInt8(MessageType.StepOut, 4);
 
-    unreal.write(msg);
+    write(msg);
 }
 
 export function sendEngineBreak()
@@ -439,7 +448,7 @@ export function sendEngineBreak()
     msg.writeUInt32LE(1, 0);
     msg.writeUInt8(MessageType.EngineBreak, 4);
 
-    unreal.write(msg);
+    write(msg);
 }
 
 export function sendRequestVariables(path : string)
@@ -452,7 +461,7 @@ export function sendRequestVariables(path : string)
     ]);
 
     msg.writeUInt32LE(msg.length - 4, 0);
-    unreal.write(msg);
+    write(msg);
 }
 
 export function sendRequestEvaluate(path : string, frameId : number)
@@ -465,7 +474,7 @@ export function sendRequestEvaluate(path : string, frameId : number)
     ]);
 
     msg.writeUInt32LE(msg.length - 4, 0);
-    unreal.write(msg);
+    write(msg);
 }
 
 export function sendBreakOptions(filters : string[])
@@ -482,7 +491,7 @@ export function sendBreakOptions(filters : string[])
     let msg = Buffer.concat(parts);
     msg.writeUInt32LE(msg.length - 4, 0);
 
-    unreal.write(msg);
+    write(msg);
 }
 
 export function sendStopPIE()
@@ -491,5 +500,5 @@ export function sendStopPIE()
     msg.writeUInt32LE(1, 0);
     msg.writeUInt8(MessageType.StopPIE, 4);
 
-    unreal.write(msg);
+    write(msg);
 }
