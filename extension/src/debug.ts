@@ -89,46 +89,64 @@ export class ASDebugSession extends LoggingDebugSession
         this.setDebuggerLinesStartAt1(true);
         this.setDebuggerColumnsStartAt1(true);
 
-        unreal.events.removeAllListeners();
-        unreal.events.on("CallStack", (msg : unreal.Message) => {
+        // Sessions all share the module-level `unreal.events` emitter, so each
+        // session only registers (and later removes) its own handlers; wiping
+        // the emitter here would deafen a still-live previous session and leave
+        // it unable to ever receive "Closed" and terminate.
+        this.listenUnreal("CallStack", (msg : unreal.Message) => {
             this.receiveCallStack(msg);
         });
 
-        unreal.events.on("Stopped", (msg : unreal.Message) => {
+        this.listenUnreal("Stopped", (msg : unreal.Message) => {
             this.receiveStopped(msg);
         });
 
-        unreal.events.on("Continued", (msg : unreal.Message) => {
+        this.listenUnreal("Continued", () => {
             this.receiveContinued();
         });
 
-        unreal.events.on("Variables", (msg : unreal.Message) => {
+        this.listenUnreal("Variables", (msg : unreal.Message) => {
             this.receiveVariables(msg);
         });
 
-        unreal.events.on("Evaluate", (msg : unreal.Message) => {
+        this.listenUnreal("Evaluate", (msg : unreal.Message) => {
             this.receiveEvaluate(msg);
         });
 
-        unreal.events.on("BreakFilters", (msg : unreal.Message) => {
+        this.listenUnreal("BreakFilters", (msg : unreal.Message) => {
             this.receiveBreakFilters(msg);
         });
 
-        unreal.events.on("Closed", () => {
+        this.listenUnreal("Closed", () => {
             this.receiveClosed();
         });
 
-        unreal.events.on("SetBreakpoint", (msg : unreal.Message) => {
+        this.listenUnreal("SetBreakpoint", (msg : unreal.Message) => {
             this.receiveBreakpoint(msg);
         });
 
-        unreal.events.on("ClearDataBreakpoints", (msg : unreal.Message) => {
+        this.listenUnreal("ClearDataBreakpoints", (msg : unreal.Message) => {
             this.receiveClearDataBreakpoints(msg);
         });
 
-        unreal.events.on("DebugServerVersion", (msg : unreal.Message) => {
+        this.listenUnreal("DebugServerVersion", (msg : unreal.Message) => {
             this.receiveDebugVersion(msg);
         });
+    }
+
+    private unrealListeners : Array<[string, (...args : any[]) => void]> = [];
+
+    private listenUnreal(event : string, handler : (...args : any[]) => void)
+    {
+        this.unrealListeners.push([event, handler]);
+        unreal.events.on(event, handler);
+    }
+
+    public detachUnrealListeners()
+    {
+        for (let [event, handler] of this.unrealListeners)
+            unreal.events.removeListener(event, handler);
+        this.unrealListeners = [];
     }
 
     /**
@@ -246,6 +264,7 @@ export class ASDebugSession extends LoggingDebugSession
         unreal.sendStopDebugging();
         unreal.disconnect();
         this.clearAllDataBreakpoints();
+        this.detachUnrealListeners();
 
         this.sendResponse(response);
     }
@@ -651,6 +670,7 @@ export class ASDebugSession extends LoggingDebugSession
 
     protected receiveClosed()
     {
+        this.detachUnrealListeners();
         this.sendEvent(new TerminatedEvent());
     }
 

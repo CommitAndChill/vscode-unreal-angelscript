@@ -479,6 +479,9 @@ class ASConfigurationProvider implements vscode.DebugConfigurationProvider {
                 }
 
                 session.start(<NodeJS.ReadableStream>socket, socket);
+                // If VS Code drops the DAP socket without a disconnect request,
+                // the session must still release its unreal.events listeners.
+                socket.on('close', () => session.detachUnrealListeners());
             }).listen(0);
         }
 
