@@ -19,8 +19,9 @@ let watcher: DiscoveryWatcher | undefined;
 let heartbeat: NodeJS.Timeout | undefined;
 let langClient: LanguageClient | undefined;
 
-const tracked = new Set<number>();   // editorPids we currently have an auto session for
-const declined = new Set<number>();  // editorPids the user stopped while still running
+const tracked = new Map<number, vscode.DebugSession | null>(); // editorPid -> auto session (null until onDidStartDebugSession delivers it)
+const declined = new Set<number>();    // editorPids the user stopped while still running
+const selfStopped = new Set<number>(); // editorPids we're stopping ourselves; suppresses the declined-marking in the terminate handler
 let lastNotified: string | undefined; // `${host}:${port}` last sent to the LS
 let scanning = false;                 // re-entrancy guard for onDiscoveryChanged
 let rescanQueued = false;
@@ -69,11 +70,28 @@ async function onDiscoveryChanged(): Promise<void> {
         if (chosen) await notifyLanguageServer('127.0.0.1', chosen.port);
         else await notifyLanguageServer(null, null);
 
-        if (!chosen) return;
-        if (tracked.has(chosen.pid) || declined.has(chosen.pid)) return;
+        // PIDs get recycled; a dead editor's decline must not block a future editor.
+        for (const pid of [...declined]) if (!isPidAlive(pid)) declined.delete(pid);
+        for (const pid of [...selfStopped]) if (!isPidAlive(pid)) selfStopped.delete(pid);
+
+        // Stop auto sessions whose editor died, or whose editor is being
+        // replaced by a better match (the LS reroute above already follows it).
+        const attaching = chosen !== null && !tracked.has(chosen.pid) && !declined.has(chosen.pid);
+        for (const [pid, session] of [...tracked]) {
+            const dead = !isPidAlive(pid);
+            const replaced = attaching && chosen !== null && pid !== chosen.pid;
+            if (!dead && !replaced) continue;
+            tracked.delete(pid);
+            if (session) {
+                selfStopped.add(pid);
+                await vscode.debug.stopDebugging(session);
+            }
+        }
+
+        if (!chosen || !attaching) return;
 
         // Reserve the slot synchronously BEFORE any await, so a concurrent scan sees it taken.
-        tracked.add(chosen.pid);
+        tracked.set(chosen.pid, null);
 
         if (!(await tcpProbe('127.0.0.1', chosen.port, PROBE_TIMEOUT_MS))) {
             tracked.delete(chosen.pid); // not attachable yet; retry next scan, do NOT delete the file
@@ -113,11 +131,17 @@ export function activate(context: vscode.ExtensionContext, client: LanguageClien
         void onDiscoveryChanged(); // initial pass for an Editor already running at activation
     }
 
+    context.subscriptions.push(vscode.debug.onDidStartDebugSession(session => {
+        const pid = session.configuration?.[PID_CONFIG_KEY];
+        if (typeof pid === 'number' && tracked.has(pid)) tracked.set(pid, session);
+    }));
+
     context.subscriptions.push(vscode.debug.onDidTerminateDebugSession(session => {
         const pid = session.configuration?.[PID_CONFIG_KEY];
-        if (typeof pid !== 'number' || !tracked.has(pid)) return;
+        if (typeof pid !== 'number') return;
         tracked.delete(pid);
-        if (isPidAlive(pid)) declined.add(pid); // don't re-attach the same still-running instance
+        if (selfStopped.delete(pid)) return;    // we stopped it (dead/replaced editor); re-attach rules unchanged
+        if (isPidAlive(pid)) declined.add(pid); // user stopped it; don't re-attach the same still-running instance
     }));
 
     context.subscriptions.push({ dispose: () => { void deactivate(); } });
